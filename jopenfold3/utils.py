@@ -386,6 +386,15 @@ def broadcast_token_feat_to_atoms(
     td = token_dim if token_dim >= 0 else ndim_feat + token_dim
     feat_dims = token_feat.shape[td + 1:]
 
+    # Features may carry a leading sample axis the masks and indices lack (diffusion samples): broadcast
+    # all of them to their common batch shape, as the PyTorch version does implicitly.
+    batch_dims = tuple(jnp.broadcast_shapes(tuple(batch_dims), tuple(token_feat.shape[:td]),
+                                            tuple(atom_to_token_index.shape[:-1]), tuple(atom_mask.shape[:-1])))
+    token_mask = jnp.broadcast_to(token_mask, (*batch_dims, n_token))
+    token_feat = jnp.broadcast_to(token_feat, (*batch_dims, n_token, *feat_dims))
+    atom_to_token_index = jnp.broadcast_to(atom_to_token_index, (*batch_dims, n_atom))
+    atom_mask = jnp.broadcast_to(atom_mask, (*batch_dims, n_atom))
+
     # Mask token features
     mask_shape = (*batch_dims, n_token) + ((1,) * len(feat_dims))
     token_feat = token_feat * token_mask.reshape(mask_shape)
@@ -447,6 +456,14 @@ def aggregate_atom_feat_to_tokens(
     ad = atom_dim if atom_dim >= 0 else ndim + atom_dim
     feat_dims = atom_feat.shape[ad + 1:]
     n_atom = atom_feat.shape[ad]
+
+    # Features may carry a leading sample axis the masks and indices lack (diffusion samples): broadcast
+    # all of them to their common batch shape, as the PyTorch version does implicitly.
+    batch_dims = tuple(jnp.broadcast_shapes(tuple(batch_dims), tuple(atom_mask.shape[:-1]),
+                                            tuple(atom_to_token_index.shape[:-1]), tuple(atom_feat.shape[:ad])))
+    atom_mask = jnp.broadcast_to(atom_mask, (*batch_dims, n_atom))
+    atom_to_token_index = jnp.broadcast_to(atom_to_token_index, (*batch_dims, n_atom))
+    atom_feat = jnp.broadcast_to(atom_feat, (*batch_dims, n_atom, *feat_dims))
 
     # Mask atom features
     mask_shape = atom_mask.shape + (1,) * len(feat_dims)
@@ -534,9 +551,12 @@ def max_atom_per_token_masked_select(
     if n_atom is None:
         raise ValueError("n_atom is required (use batch['atom_mask'].shape[-1]).")
 
-    batch_dims = atom_feat.shape[:-2]
     c_out = atom_feat.shape[-1]
     n_padded = atom_feat.shape[-2]
+    # A sample axis on the features or the mask only: broadcast both to their common batch shape
+    batch_dims = tuple(jnp.broadcast_shapes(tuple(atom_feat.shape[:-2]), tuple(max_atom_per_token_mask.shape[:-1])))
+    atom_feat = jnp.broadcast_to(atom_feat, (*batch_dims, n_padded, c_out))
+    max_atom_per_token_mask = jnp.broadcast_to(max_atom_per_token_mask, (*batch_dims, n_padded))
     fb_size = int(math.prod(batch_dims)) if batch_dims else 1
 
     feat_flat = atom_feat.reshape(fb_size, n_padded, c_out)
@@ -673,7 +693,12 @@ def get_token_representative_atoms(
     n_atom = x.shape[-2]
     n_token = rep_index.shape[-1]
 
-    batch_shape = x.shape[:-2]
+    # Coordinates carry a sample axis the indices and masks lack: broadcast all to their common batch shape
+    batch_shape = tuple(jnp.broadcast_shapes(tuple(x.shape[:-2]), tuple(rep_index.shape[:-1]),
+                                             tuple(atom_mask.shape[:-1])))
+    x = jnp.broadcast_to(x, (*batch_shape, n_atom, 3))
+    rep_index = jnp.broadcast_to(rep_index, (*batch_shape, n_token))
+    atom_mask = jnp.broadcast_to(atom_mask, (*batch_shape, n_atom))
     fb_size = int(math.prod(batch_shape)) if batch_shape else 1
 
     safe_index = jnp.clip(rep_index, 0, n_atom - 1).astype(jnp.int32)

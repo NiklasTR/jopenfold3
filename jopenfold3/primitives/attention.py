@@ -65,7 +65,6 @@ def _attention(
     """
     H, Q, C = query.shape[-3:]
     K = key.shape[-2]
-    batch_shape = query.shape[:-3]
 
     # Merge biases into a single additive bias [*, H, Q, K]
     bias = None
@@ -73,6 +72,14 @@ def _attention(
         bias = biases[0]
         for b in biases[1:]:
             bias = bias + b
+    # A bias may carry leading axes the queries lack (e.g. diffusion samples in the confidence heads):
+    # attend over the common batch shape, as PyTorch broadcasting does.
+    batch_shape = tuple(jnp.broadcast_shapes(tuple(query.shape[:-3]), tuple(key.shape[:-3]), tuple(value.shape[:-3]),
+                                             *(() if bias is None else (tuple(bias.shape[:-3]),))))
+    query = jnp.broadcast_to(query, batch_shape + (H, Q, C))
+    key = jnp.broadcast_to(key, batch_shape + key.shape[-3:])
+    value = jnp.broadcast_to(value, batch_shape + value.shape[-3:])
+    if bias is not None:
         # Broadcast + flatten to 4-D so dot_product_attention sees (B, N, T, S)
         bias = jnp.broadcast_to(bias, batch_shape + (H, Q, K)).reshape(-1, H, Q, K)
 

@@ -43,6 +43,30 @@ def create_noise_schedule(
     )
 
 
+def sample_rotations(key, shape, dtype=jnp.float32) -> Array:
+    """Uniform random rotation matrices ``[*shape, 3, 3]`` (normalised Gaussian quaternions)."""
+    q = jax.random.normal(key, (*shape, 4), dtype=dtype)
+    q = q / jnp.linalg.norm(q, axis=-1, keepdims=True)
+    w, x, y, z = (q[..., i] for i in range(4))
+    return jnp.stack([
+        jnp.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], axis=-1),
+        jnp.stack([2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], axis=-1),
+        jnp.stack([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], axis=-1),
+    ], axis=-2)
+
+
+def centre_random_augmentation(xl, atom_mask, *, key, scale_trans: float = 1.0) -> Array:
+    """Implements AF3 Algorithm 19, as the PyTorch sampler applies it before every step: centre the
+    masked atoms, apply a uniform random rotation and a Gaussian translation (``scale_trans`` A)."""
+    k_rot, k_trans = jax.random.split(key)
+    rots = sample_rotations(k_rot, xl.shape[:-2], xl.dtype)
+    trans = scale_trans * jax.random.normal(k_trans, (*xl.shape[:-2], 3), dtype=xl.dtype)
+    mask = atom_mask[..., None]
+    mean = jnp.sum(xl * mask, axis=-2, keepdims=True) / jnp.sum(mask, axis=-2, keepdims=True)
+    out = (xl - mean) @ jnp.swapaxes(rots, -1, -2) + trans[..., None, :]
+    return out * mask
+
+
 class DiffusionModule(eqx.Module):
     """Implements AF3 Algorithm 20."""
 
@@ -173,13 +197,17 @@ class SampleDiffusion(eqx.Module):
             xl, key = carry
             sigma_cur, sigma_next = step_inputs
 
+            key, k_aug, k1, k_diff = jax.random.split(key, 4)
+            # The denoiser is trained on centred, randomly oriented inputs (Algorithm 18 line 3)
+            xl = centre_random_augmentation(xl, atom_mask, key=k_aug)
+
             gamma = jnp.where(sigma_next > self.gamma_min, self.gamma_0, 0.0)
             t_val = sigma_cur * (gamma + 1)
 
-            key, k1, k_diff = jax.random.split(key, 3)
             noise = (
                 self.noise_scale
-                * jnp.sqrt(t_val**2 - sigma_cur**2)
+                # t = sigma exactly when gamma = 0; compiled, t^2 - sigma^2 can round below zero (NaN in sqrt)
+                * jnp.sqrt(jnp.maximum(t_val**2 - sigma_cur**2, 0.0))
                 * jax.random.normal(k1, xl.shape, dtype=xl.dtype)
             )
             xl_noisy = xl + noise

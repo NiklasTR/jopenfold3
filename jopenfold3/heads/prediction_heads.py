@@ -98,6 +98,14 @@ class PairformerEmbedding(eqx.Module):
         """
         zij = self.embed_zij(si_input=si_input, zij=zij, x_pred=x_pred)
 
+        # zij now carries the sample axis of x_pred; give si (and the masks) the same leading shape, so the
+        # pairformer scan carry keeps one shape (PyTorch broadcasts this implicitly)
+        lead = tuple(jnp.broadcast_shapes(tuple(si.shape[:-2]), tuple(zij.shape[:-3])))
+        si = jnp.broadcast_to(si, lead + si.shape[-2:])
+        zij = jnp.broadcast_to(zij, lead + zij.shape[-3:])
+        single_mask = jnp.broadcast_to(single_mask, lead + single_mask.shape[-1:])
+        pair_mask = jnp.broadcast_to(pair_mask, lead + pair_mask.shape[-2:])
+
         si, zij = self.pairformer_stack(
             s=si,
             z=zij,

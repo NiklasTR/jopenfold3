@@ -136,7 +136,8 @@ def featurize(query_set, seed) -> tuple[dict, "AtomArray"]:
     dataset = InferenceDataset(config)
     features = dataset[0]
 
-    if not features.get("valid_sample", torch.tensor([False])).item():
+    valid = features.get("valid_sample")
+    if valid is None or not bool(valid.item()):
         print("Error: featurization failed", file=sys.stderr)
         sys.exit(1)
 
