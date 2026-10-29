@@ -121,8 +121,12 @@ def find_modified_residue_atom_ids(atom_array: AtomArray) -> np.ndarray:
         & (not_peptide_bond & not_phospho_diester_bond)
     ]
 
-    # Get corresponding canonical residue atoms
+    # Get corresponding canonical residue atoms (plus residues a query bonds covalently)
     mod_crp_atom_ids = np.unique(mod_crp_bonds[:, :2].flatten())
+    if "force_atomize" in atom_array.get_annotation_categories():
+        mod_crp_atom_ids = np.union1d(
+            mod_crp_atom_ids, atom_array._atom_idx[atom_array.force_atomize]
+        )
     mod_crp_atoms = atom_array[np.isin(atom_array._atom_idx, mod_crp_atom_ids)]
 
     # Get corresponding canonical residue token starts

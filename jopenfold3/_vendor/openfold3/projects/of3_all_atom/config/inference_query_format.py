@@ -34,7 +34,8 @@ from jopenfold3._vendor.openfold3.core.data.resources.residues import MoleculeTy
 class Atom(NamedTuple):
     chain_id: str
     residue_id: int
-    atom_id: int
+    # atom name (e.g. "SG"), or the 0-based index of the atom within its heavy-atom residue
+    atom_id: int | str
 
 
 class Bond(NamedTuple):

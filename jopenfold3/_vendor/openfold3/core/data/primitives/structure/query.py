@@ -633,9 +633,42 @@ def structure_with_ref_mols_from_query(query: Query) -> StructureWithReferenceMo
             else:
                 atom_array += segment_atom_array
 
+    if query.covalent_bonds:
+        add_covalent_bonds(atom_array, query.covalent_bonds)
+
     # Force coordinates to 0 for consistency
     atom_array.coord[:] = 0.0
 
     return StructureWithReferenceMolecules(
         atom_array=atom_array, processed_reference_mols=processed_reference_mols
     )
+
+
+def add_covalent_bonds(atom_array: AtomArray, bonds) -> None:
+    """Adds the Query's covalent bonds to the AtomArray in place.
+
+    Each bond end is (chain_id, residue_id, atom name or 0-based index within the
+    residue). Every residue taking part in a covalent bond is marked in a
+    ``force_atomize`` annotation, which the tokenizer atomizes so that the bond
+    survives into the ``token_bonds`` feature (only bonds between atomized tokens
+    are kept). Without it, a residue bonded through a peptide-like C-N bond, such as
+    an N-terminal acyl staple, would stay a residue token and lose the bond.
+    """
+    force_atomize = np.zeros(len(atom_array), dtype=bool)
+    for bond in bonds:
+        ends = []
+        for atom in bond:
+            residue = np.flatnonzero(
+                (atom_array.chain_id == atom.chain_id)
+                & (atom_array.res_id == atom.residue_id)
+            )
+            if isinstance(atom.atom_id, str):
+                match = residue[atom_array.atom_name[residue] == atom.atom_id]
+            else:
+                match = residue[atom.atom_id : atom.atom_id + 1]
+            if len(match) != 1:
+                raise ValueError(f"Covalent bond atom {tuple(atom)} not found")
+            ends.append(int(match[0]))
+            force_atomize[residue] = True
+        atom_array.bonds.add_bond(ends[0], ends[1], struc.BondType.SINGLE)
+    atom_array.set_annotation("force_atomize", force_atomize)
